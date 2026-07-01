@@ -16,27 +16,30 @@ FOLLOWER_PORT = "COM8"
 LEADER_ID = "so101_leader_1"
 FOLLOWER_ID = "so101_follower_1"
 
-# Camera indices you found
+# Camera indices
 WRIST_INDEX = 1
 ZED_INDEX = 2
 
-# Wrist camera refused 15 fps, so keep it at 30
+# Wrist camera
 WRIST_WIDTH = 640
 WRIST_HEIGHT = 480
 WRIST_FPS = 30
 
-# Lower ZED resolution, but keep fps at 30 to avoid exact-FPS validation errors
-# ZED is usually side-by-side stereo, so 1280x360 means each eye is 640x360.
+# ZED stereo stream. 1344x376 is common ZED VGA side-by-side mode.
+# Each eye becomes 672x376 after crop.
 ZED_WIDTH = 1344
 ZED_HEIGHT = 376
 ZED_FPS = 30
 
-# Which ZED eye to export as cropped video
 ZED_SIDE = "left"  # "left" or "right"
+
+# Streaming encoding reduces the pause after pressing Right Arrow.
+STREAMING_ENCODING = True
+ENCODER_THREADS = 1
+VIDEO_CODEC = "libx264"
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
-# Datasets saved inside your VS Code project
 DATA_ROOT = PROJECT_ROOT / "so101_recordings"
 LEROBOT_DATA_ROOT = DATA_ROOT / "lerobot_home"
 EXPORT_ROOT = DATA_ROOT / "exports"
@@ -109,8 +112,7 @@ def run_cmd(cmd: list[str]) -> None:
     print("\nProject dataset folder:")
     print(LEROBOT_DATA_ROOT)
 
-    print("\nCalibration stays in default LeRobot cache.")
-    print()
+    print("\nCalibration stays in default LeRobot cache.\n")
 
     subprocess.run(cmd, env=make_env(), check=True)
 
@@ -160,17 +162,17 @@ def camera_config(mode: str = "both") -> str | None:
 # ================= ROBOT ACTIONS =================
 
 def teleop() -> None:
-    """
-    Simple teleop only. No cameras. No Rerun.
-    """
     cmd = [
         find_cli("lerobot-teleoperate"),
+
         "--teleop.type=so101_leader",
         f"--teleop.port={LEADER_PORT}",
         f"--teleop.id={LEADER_ID}",
+
         "--robot.type=so101_follower",
         f"--robot.port={FOLLOWER_PORT}",
         f"--robot.id={FOLLOWER_ID}",
+
         "--display_data=false",
     ]
 
@@ -188,14 +190,14 @@ def record(
     """
     Records LeRobot training data.
 
-    Same --name automatically overwrites old dataset.
+    Same --name automatically overwrites the old dataset.
+    Streaming encoding is enabled to reduce wait time between episodes.
     """
     name = clean_name(name)
 
     dset_path = dataset_dir(name)
     old_cache_path = default_cache_dataset_dir(name)
 
-    # Always overwrite old dataset with same name
     for path in [dset_path, old_cache_path]:
         if path.exists():
             print(f"Deleting old dataset: {path}")
@@ -214,9 +216,7 @@ def record(
 
         "--display_data=false",
 
-        # Save dataset inside this VS Code project
         f"--dataset.root={str(dset_path)}",
-
         f"--dataset.repo_id={repo_id(name)}",
         f"--dataset.num_episodes={episodes}",
         f"--dataset.single_task={task}",
@@ -224,6 +224,13 @@ def record(
         f"--dataset.reset_time_s={reset_time}",
         "--dataset.push_to_hub=False",
     ]
+
+    if STREAMING_ENCODING:
+        cmd += [
+            "--dataset.streaming_encoding=true",
+            f"--dataset.encoder_threads={ENCODER_THREADS}",
+            f"--dataset.vcodec={VIDEO_CODEC}",
+        ]
 
     cam_cfg = camera_config(camera_mode)
     if cam_cfg is not None:
@@ -234,14 +241,11 @@ def record(
     print("\nSaved LeRobot training dataset:")
     print(dset_path)
 
-    print("\nExporting readable servo CSV and copied/cropped videos...")
+    print("\nExporting readable servo CSV and videos...")
     export(name=name, zed_side=ZED_SIDE)
 
 
 def replay(name: str, episode: int) -> None:
-    """
-    Replays a saved episode on the follower arm.
-    """
     name = clean_name(name)
     dset_path = dataset_dir(name)
 
@@ -284,11 +288,6 @@ def list_runs() -> None:
 # ================= CAMERA PREVIEW =================
 
 def preview_cameras() -> None:
-    """
-    Opens OpenCV preview windows:
-    - wrist camera
-    - cropped ZED left/right eye
-    """
     import cv2
 
     wrist = cv2.VideoCapture(WRIST_INDEX, cv2.CAP_DSHOW)
@@ -339,9 +338,6 @@ def preview_cameras() -> None:
 # ================= EXPORT HELPERS =================
 
 def crop_zed_video(src: Path, dst: Path, side: str) -> None:
-    """
-    Crops a side-by-side ZED MP4 to left or right eye.
-    """
     import cv2
 
     cap = cv2.VideoCapture(str(src))
@@ -396,17 +392,14 @@ def crop_zed_video(src: Path, dst: Path, side: str) -> None:
     cap.release()
 
 
-
-
-
 def export(name: str, zed_side: str = ZED_SIDE) -> None:
     """
-    Exports readable copies:
+    Exports:
     - one merged servo/action/state CSV
-    - wrist videos only
-    - cropped single-eye ZED videos only
+    - wrist videos
+    - cropped single-eye ZED videos
 
-    It does NOT copy raw side-by-side ZED stereo videos anymore.
+    Raw side-by-side ZED videos are not copied into the clean review folder.
     """
     name = clean_name(name)
     dset = dataset_dir(name)
@@ -417,7 +410,6 @@ def export(name: str, zed_side: str = ZED_SIDE) -> None:
 
     export_dir = EXPORT_ROOT / name
 
-    # Overwrite previous export for same recording
     if export_dir.exists():
         shutil.rmtree(export_dir)
 
@@ -426,7 +418,7 @@ def export(name: str, zed_side: str = ZED_SIDE) -> None:
     print(f"\nDataset folder:\n{dset}")
     print(f"\nExport folder:\n{export_dir}")
 
-    # ---------- Export servo/action/state parquet to ONE CSV ----------
+    # ---------- CSV export ----------
     try:
         import pandas as pd
     except ImportError:
@@ -482,7 +474,6 @@ def export(name: str, zed_side: str = ZED_SIDE) -> None:
 
             out = df[keep_cols].copy()
 
-            # Expand vector/list columns into separate CSV columns.
             expanded = {}
             drop_cols = []
 
@@ -530,19 +521,20 @@ def export(name: str, zed_side: str = ZED_SIDE) -> None:
             print("\nServo/action/state CSV saved:")
             print(csv_path)
 
-            # Print episode count if possible
             episode_cols = [c for c in out.columns if "episode" in c.lower()]
             if episode_cols:
                 ep_col = episode_cols[0]
                 try:
-                    print(f"\nEpisodes found in CSV: {sorted(out[ep_col].dropna().unique().tolist())}")
+                    episodes = sorted(out[ep_col].dropna().unique().tolist())
+                    print(f"\nEpisodes found in CSV: {episodes}")
+                    print(f"Episode count: {len(episodes)}")
                 except Exception:
                     pass
 
         else:
             print("\nNo readable parquet files found.")
 
-    # ---------- Export videos cleanly ----------
+    # ---------- Clean video export ----------
     videos = sorted(dset.rglob("*.mp4"))
 
     if not videos:
@@ -551,10 +543,10 @@ def export(name: str, zed_side: str = ZED_SIDE) -> None:
 
     videos_dir = export_dir / "videos"
     wrist_dir = videos_dir / "wrist"
-    zed_left_dir = videos_dir / f"overhead_zed_{zed_side}_eye"
+    zed_dir = videos_dir / f"overhead_zed_{zed_side}_eye"
 
     wrist_dir.mkdir(parents=True, exist_ok=True)
-    zed_left_dir.mkdir(parents=True, exist_ok=True)
+    zed_dir.mkdir(parents=True, exist_ok=True)
 
     wrist_count = 0
     zed_count = 0
@@ -565,11 +557,8 @@ def export(name: str, zed_side: str = ZED_SIDE) -> None:
     for video in videos:
         video_str = str(video).lower()
 
-        # Keep wrist videos as-is
         if "wrist" in video_str:
             dst = wrist_dir / video.name
-
-            # Avoid overwriting if LeRobot uses same filename in different folders
             if dst.exists():
                 dst = wrist_dir / f"{video.parent.name}_{video.name}"
 
@@ -577,18 +566,15 @@ def export(name: str, zed_side: str = ZED_SIDE) -> None:
             wrist_count += 1
             continue
 
-        # Crop ZED side-by-side into single left/right eye
         if "overhead_zed" in video_str or "zed" in video_str:
-            dst = zed_left_dir / video.name
-
+            dst = zed_dir / video.name
             if dst.exists():
-                dst = zed_left_dir / f"{video.parent.name}_{video.name}"
+                dst = zed_dir / f"{video.parent.name}_{video.name}"
 
             crop_zed_video(video, dst, zed_side)
             zed_count += 1
             continue
 
-        # Ignore unknown raw videos by default
         other_count += 1
 
     print(f"\nWrist videos exported: {wrist_count}")
@@ -599,6 +585,91 @@ def export(name: str, zed_side: str = ZED_SIDE) -> None:
 
     print("\nClean review folder:")
     print(videos_dir)
+
+
+def review(name: str, zed_side: str = ZED_SIDE) -> None:
+    export(name=name, zed_side=zed_side)
+
+    export_dir = EXPORT_ROOT / clean_name(name)
+
+    print("\nReview folder:")
+    print(export_dir)
+
+    videos = sorted(export_dir.rglob("*.mp4"))
+
+    if not videos:
+        print("\nNo videos found.")
+        return
+
+    print("\nVideos found:")
+    for video in videos:
+        print(f"  {video}")
+
+    os.startfile(export_dir)
+
+
+def stats(name: str) -> None:
+    """
+    Shows how many episodes, rows, and video files were saved.
+    """
+    name = clean_name(name)
+    export_dir = EXPORT_ROOT / name
+    csv_path = export_dir / f"{name}_servo_data.csv"
+
+    if not csv_path.exists():
+        print("CSV not found. Exporting first...")
+        export(name=name, zed_side=ZED_SIDE)
+
+    if not csv_path.exists():
+        print(f"Still no CSV found: {csv_path}")
+        return
+
+    import pandas as pd
+
+    df = pd.read_csv(csv_path)
+
+    print("\nCSV:")
+    print(csv_path)
+    print(f"Total rows: {len(df)}")
+    print(f"CSV size MB: {csv_path.stat().st_size / 1_000_000:.2f}")
+
+    episode_cols = [c for c in df.columns if "episode" in c.lower()]
+    frame_cols = [c for c in df.columns if "frame" in c.lower()]
+    timestamp_cols = [c for c in df.columns if "timestamp" in c.lower()]
+
+    if episode_cols:
+        ep_col = episode_cols[0]
+        episodes = sorted(df[ep_col].dropna().unique().tolist())
+        print(f"\nEpisode column: {ep_col}")
+        print(f"Episodes saved: {episodes}")
+        print(f"Episode count: {len(episodes)}")
+
+        print("\nRows per episode:")
+        print(df.groupby(ep_col).size())
+
+        if frame_cols:
+            fr_col = frame_cols[0]
+            print(f"\nFrame stats per episode using {fr_col}:")
+            print(df.groupby(ep_col)[fr_col].agg(["min", "max", "count"]))
+
+        if timestamp_cols:
+            ts_col = timestamp_cols[0]
+            print(f"\nTimestamp stats per episode using {ts_col}:")
+            print(df.groupby(ep_col)[ts_col].agg(["min", "max", "count"]))
+
+    print("\nExported videos:")
+    videos = sorted(export_dir.rglob("*.mp4"))
+
+    if not videos:
+        print("No exported videos found.")
+    else:
+        total = 0
+        for video in videos:
+            size = video.stat().st_size / 1_000_000
+            total += size
+            print(f"{size:8.2f} MB  {video}")
+        print(f"\nTotal video size: {total:.2f} MB")
+
 
 # ================= CLI =================
 
@@ -628,9 +699,16 @@ def main() -> None:
     rep.add_argument("--name", required=True)
     rep.add_argument("--episode", type=int, default=0)
 
-    exp = sub.add_parser("export", help="Export servo CSV and copied/cropped videos")
+    exp = sub.add_parser("export", help="Export servo CSV and clean review videos")
     exp.add_argument("--name", required=True)
     exp.add_argument("--zed-side", choices=["left", "right"], default=ZED_SIDE)
+
+    rev = sub.add_parser("review", help="Export and open review folder")
+    rev.add_argument("--name", required=True)
+    rev.add_argument("--zed-side", choices=["left", "right"], default=ZED_SIDE)
+
+    st = sub.add_parser("stats", help="Show saved episodes, rows, and video sizes")
+    st.add_argument("--name", required=True)
 
     args = parser.parse_args()
 
@@ -661,6 +739,15 @@ def main() -> None:
             name=args.name,
             zed_side=args.zed_side,
         )
+
+    elif args.cmd == "review":
+        review(
+            name=args.name,
+            zed_side=args.zed_side,
+        )
+
+    elif args.cmd == "stats":
+        stats(name=args.name)
 
     elif args.cmd == "list":
         list_runs()
